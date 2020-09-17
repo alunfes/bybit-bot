@@ -1,0 +1,8 @@
+/ignore/
+/bybit-bot/
+/Model/
+/Data/
+*.csv
+*.dat
+*.npy
+Procedure
