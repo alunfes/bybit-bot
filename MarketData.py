@@ -3,6 +3,7 @@ import datetime
 import gzip
 import pandas as pd
 import time
+import scipy
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import OneHotEncoder
@@ -51,6 +52,9 @@ class MarketData:
         cls.model_data_lock = threading.Lock()
         cls.df_lock = threading.Lock()
         cls.pred_lock = threading.Lock()
+        cls.time_sleep_lock = threading.Lock() #adjust time sleep for Bot and Account to prioritize MarketData calc
+        cls.time_sleep = 1
+        cls.prediction = ''
         cls.opt_window_size = opt_window_size
         cls.opt_kijun = opt_kijun
         cls.time_steps = time_steps
@@ -65,8 +69,9 @@ class MarketData:
         #print(cls.x_train[-1])
         #print(cls.y_train[-1])
         #print(cls.abs_train[-1])
-        th = threading.Thread(target=cls.__ohlc_thread())
+        th = threading.Thread(target=cls.__ohlc_thread)
         th.start()
+        print('MarketData thread started')
         #cls.ohlc = cls.con_df_to_ohlc(df)
 
 
@@ -75,6 +80,7 @@ class MarketData:
         print('initializing MarketData....')
         cls.model_data_lock = threading.Lock()
         cls.opt_window_size = opt_window_size
+        cls.prediction = ''
         cls.opt_kijun = opt_kijun
         cls.time_steps = time_steps
         cls.timestep_skip = timestep_skip
@@ -82,8 +88,6 @@ class MarketData:
         cls.df['timestamp'] = 1
         cls.set_model_data(cls.generate_data_for_model(cls.df.iloc[-5000:]))
         cls.model = keras.models.load_model('./Model/model2.h5', compile=False, custom_objects={'KerasLayer': hub.KerasLayer})
-
-
 
 
 
@@ -96,6 +100,16 @@ class MarketData:
     def set_model_data(cls, model_data):
         with cls.model_data_lock:
             cls.x_train, cls.y_train, cls.abs_train = model_data[0], model_data[1], model_data[2].reshape(model_data[2].shape[0], model_data[2].shape[1], 1)
+
+    @classmethod
+    def __set_time_sleep(cls, t):
+        with cls.time_sleep_lock:
+            cls.time_sleep = t
+
+    @classmethod
+    def get_time_sleep(cls):
+        with cls.time_sleep_lock:
+            return cls.time_sleep
 
     @classmethod
     def get_df(cls):
@@ -143,10 +157,10 @@ class MarketData:
     @classmethod
     def download_ohlc(cls):
         dt = datetime.datetime.now()
-        target_from = int(dt.timestamp() - cls.time_steps * 60 - 120) #cov, skew, kurtなどのデータは、1データを計算するのにtime_steps分のデータが必要になる。
+        target_from = int(dt.timestamp() - cls.time_steps * 60 * 2 - cls.opt_window_size - 120) #cov, skew, kurtなどのデータは、1データを計算するのにtime_steps分のデータが必要になる。
         df = RestAPI.get_ohlc(1, target_from)
         print('downloaded ohlc: ', len(df), ' minutes data.')
-        return df.iloc[:-1]
+        return df
 
     @classmethod
     def calc_opt_position(cls):
@@ -183,22 +197,26 @@ class MarketData:
 
     @classmethod
     def generate_data_for_model(cls, df_master):
+        cls.__set_time_sleep(7)
         start = time.time()
         scaler = MinMaxScaler()
         df = df_master.copy()
         sk = [0] * cls.time_steps
         ku = [0] * cls.time_steps
+        close = np.array(df['close'])
         for i in range(len(df) - cls.time_steps):
-            sk.append(df['close'].iloc[i:i + cls.time_steps].diff().skew())
-            ku.append(df['close'].iloc[i:i + cls.time_steps].diff().kurt())
+            sk.append(scipy.stats.skew(np.diff(close[i:i + cls.time_steps])))
+            ku.append(scipy.stats.kurtosis(np.diff(close[i:i + cls.time_steps])))
         df['skew'] = sk
         df['kurt'] = ku
         # cov, ave_div
         cov = [0] * cls.time_steps
         ave_div = [0] * cls.time_steps
         for i in range(len(df) - cls.time_steps):
-            cov.append(np.cov(scaler.fit_transform(np.array(df['close'].iloc[i:i + cls.time_steps]).reshape(-1, 1)).reshape(-1)))
-            ave_div.append(np.array(df['close'])[i + cls.time_steps - 1] / np.average(df['close'].iloc[i:i + cls.time_steps]))
+            #cov.append(np.cov(scaler.fit_transform(np.array(df['close'].iloc[i:i + cls.time_steps]).reshape(-1, 1)).reshape(-1)))
+            #ave_div.append(np.array(df['close'])[i + cls.time_steps - 1] / np.average(df['close'].iloc[i:i + cls.time_steps]))
+            cov.append(np.cov(scaler.fit_transform(close[i:i + cls.time_steps].reshape(-1, 1)).reshape(-1)))
+            ave_div.append(close[i + cls.time_steps - 1] / np.average(close[i:i + cls.time_steps]))
         df['cov'] = cov
         df['ave_div'] = ave_div
         df['pre_opt'] = df['opt_position'].shift(6) - 1
@@ -210,8 +228,8 @@ class MarketData:
         dftrain_y = df['opt_position']
         dftrain_y = dftrain_y.replace(-1, 1)
         dftrain_y = OneHotEncoder(categories="auto", sparse=False).fit_transform(np.array(dftrain_y).reshape(-1, 1))
+
         i = len(dftrain_x)
-        #while i < len(dftrain_y) - cls.time_steps:
         li = list(scaler.fit_transform(dftrain_x.iloc[i - cls.time_steps: i]))  # timeskipしても最新のデータが含まれるようにreverseする
         li.reverse()
         li = li[::cls.timestep_skip]
@@ -220,12 +238,11 @@ class MarketData:
         con_df_train_y.append(dftrain_y[i-1])
         di = dftrain_x.iloc[i - cls.time_steps: i]['close']
         abs_df_train_x.append(np.array([max(di) / 10000, min(di) / 10000, np.median(np.array(di)) / 10000, (max(di) - di.iloc[-1]) / 1000, (di.iloc[-1] - min(di)) / 1000]))
-            #i += 1
         x_train = np.array(con_df_train_x)
         y_train = np.array(con_df_train_y)
         abs_train = np.array(abs_df_train_x)
         print('Generated model data, time:', time.time() - start)
-
+        cls.__set_time_sleep(1)
         return x_train, y_train, abs_train
 
 
@@ -238,11 +255,12 @@ class MarketData:
         #np.save('./'+str(time.time())+'-abs_train', abs_train[-1])
         #np.save('./' + str(time.time()) + '-pred', np.array(preds)[-1])
         for i, p in enumerate(preds):
+            #print(p)
             res = np.argmax(p)
             if res == 0:
-                prediction.append(1)
+                prediction.append('Buy')
             elif res == 1:
-                prediction.append(2)
+                prediction.append('Sell')
             else:
                 print('prediction error', res)
         print('prediction=', prediction[-1])
@@ -256,8 +274,6 @@ class MarketData:
         check_df = cls.get_df()
         pass
 
-
-
     '''
     毎分dfの最新のdt以降のohlcを取得して、model_dataを計算。
     '''
@@ -265,18 +281,17 @@ class MarketData:
     def __ohlc_thread(cls):
         print('started MarketData.ohlc_thread')
         t = datetime.datetime.now().timestamp()
+        kijun_timestamp = int(t - (t - (t // 60.0) * 60.0)) + 60  # timestampの秒を次の分の0に修正
         while SystemFlg.get_system_flg():
-            kijun_timestamp = int(t - (t - (t // 60.0) * 60.0)) + 60  # timestampの秒を次の分の0に修正
-            while SystemFlg.get_system_flg():
-                if kijun_timestamp + 1 <= datetime.datetime.now().timestamp():
-                    downloaded_df = RestAPI.get_ohlc(1, cls.df['timestamp'].iloc[-1] - 60)
-                    cls.add_df(downloaded_df)
-                    print(cls.get_df().iloc[-10:])
-                    cls.set_model_data(cls.generate_data_for_model(cls.get_df()))
-                    cls.__calc_prediction()
-                    kijun_timestamp += 60
-                else:
-                    time.sleep(1)
+            if kijun_timestamp + 1 <= datetime.datetime.now().timestamp():
+                downloaded_df = RestAPI.get_ohlc(1, cls.df['timestamp'].iloc[-1] - 60)
+                cls.add_df(downloaded_df)
+                print(cls.get_df().iloc[-10:])
+                cls.set_model_data(cls.generate_data_for_model(cls.get_df()))
+                cls.__calc_prediction()
+                kijun_timestamp += 60
+            else:
+                time.sleep(1)
         print('stopped MarketData.ohlc_thread!')
 
 

@@ -60,7 +60,7 @@ class RestAPI:
         df = pd.DataFrame({'timestamp':timestamp, 'dt':dt, 'open':open, 'high':high, 'low':low, 'close':close, 'size':volume})
         df = df.astype({'timestamp': 'int64', 'dt':'object', 'open': 'float64', 'high': 'float64', 'low': 'float64', 'close': 'float64', 'size': 'int64'})
         if time.time() - df.iloc[-1]['timestamp'] <= 59: #分の途中でもohlcを返すので、60秒経過しているかチェックして、経過していなければ削除
-            df = df.iloc[0:-2]
+            df = df.iloc[0:-1]
         return df
 
     @classmethod

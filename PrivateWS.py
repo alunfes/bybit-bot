@@ -180,7 +180,7 @@ class PrivateWS:
             if message['topic'] == 'execution':
                 d = message['data']
             elif message['topic'] == 'order':
-                for d in  message['data']:
+                for d in message['data']:
                     Account.process_execution(d['order_id'], d['leaves_qty'], 0 if d['order_status'] == 'New' else d['exec_qty'], d['last_exec_price'], d['order_type'], d['status'])
                     PrivateWSData.add_order_data(message['data'])
             elif message['topic'] == 'position':
@@ -215,6 +215,7 @@ class PrivateWSData:
 
 if __name__ == '__main__':
     SystemFlg.initialize()
+    Account.initialize()
     pws = PrivateWS()
     while True:
         time.sleep(1)

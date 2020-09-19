@@ -1,9 +1,11 @@
 import datetime
 import time
 import asyncio
+import threading
 from functools import partial
 from SystemFlg import SystemFlg
 from Trade import Trade
+
 
 '''
 order idを記録
@@ -31,10 +33,15 @@ class ws:
             loop.run_until_complete(testA.process_execution(i))
             print('c')
 
-
+'''
+botがorder出してorder idをaccountに渡す。
+order idを基に逐次（10sec)確認して約定をholding, plnなどに反映させる。
+botがprice update/cancelしたらaccountにその情報を渡す。
+'''
 class Account:
     @classmethod
     def initialize(cls):
+        cls.lock_order_data = threading.Lock()
         cls.__initialize_order()
         cls.__initialize_holding()
 
@@ -53,6 +60,11 @@ class Account:
         cls.win_rate = 0
         cls.pre_total_pl = 0 # for calc of win rate
         cls.num_market_order = 0
+        cls.pl_per_min = 0
+
+        th = threading.Thread(target=cls.__ohlc_thread)
+        th.start()
+        print('Account thread started')
 
 
 
@@ -61,38 +73,60 @@ class Account:
         print('started Account.ohlc_thread')
         cls.start_ts = time.time()
         while SystemFlg.get_system_flg():
+            cls.__check_order_status_API()
             cls.__calc_total_pl()
+            cls.pl_per_min = round((cls.total_pl / ((time.time() - cls.start_ts) / 60.0)), 4)
             time.sleep(10)
 
+    @classmethod
+    def __check_order_status_API(cls):
+        if len(cls.order_id_list) > 0:
+            orders = Trade.get_orders()#.reverse()
+            for order in orders:
+                if order['info']['order_id'] in cls.order_id_list:
+                    if order['info']['leaves_qty'] < cls.order_leaves_qty[order['info']['order_id']]:
+                        cls.__process_execution(order['info']['order_id'], order['info']['leaves_qty'], order['info']['exec_qty'], order['info']['last_exec_price'], order['info']['order_type'], order['info']['order_status'])
 
 
     @classmethod
     def __initialize_order(cls):
-        cls.order_id_list = []
-        cls.order_side = {}
-        cls.order_price = {}
-        cls.order_leaves_qty = {}
-        cls.order_dt = {}
-        cls.order_type = {}  # market / limit / limit-market (limit orderとしてentryして最初の1分で約定しなかったらmarket orderにする）
-        cls.order_status = {}
+        with cls.lock_order_data:
+            cls.order_id_list = []
+            cls.order_side = {}
+            cls.order_price = {}
+            cls.order_leaves_qty = {}
+            cls.order_dt = {}
+            cls.order_type = {}  # market / limit / limit-market (limit orderとしてentryして最初の1分で約定しなかったらmarket orderにする）
+            cls.order_status = {}
+
+    @classmethod
+    def get_order_data(cls):
+        with cls.lock_order_data:
+            if len(cls.order_id_list) > 0:
+                oid = cls.order_id_list[-1]
+                return {'order_id':oid, 'side':cls.order_side[oid], 'type':cls.order_type[oid], 'price':cls.order_price[oid], 'leaves_qty':cls.order_leaves_qty[oid],'status':cls.order_status[oid]}
+            else:
+                return None
 
     @classmethod
     def __del_order(cls, target_order_id):
-        if target_order_id in cls.order_id_list:
-            cls.order_id_list.remove(target_order_id)
-            del cls.order_side[target_order_id]
-            del cls.order_price[target_order_id]
-            del cls.order_leaves_qty[target_order_id]
-            del cls.order_dt[target_order_id]
-            del cls.order_type[target_order_id]  # market / limit
-            del cls.order_status[target_order_id]
+        with cls.lock_order_data:
+            if target_order_id in cls.order_id_list:
+                cls.order_id_list.remove(target_order_id)
+                del cls.order_side[target_order_id]
+                del cls.order_price[target_order_id]
+                del cls.order_leaves_qty[target_order_id]
+                del cls.order_dt[target_order_id]
+                del cls.order_type[target_order_id]  # market / limit
+                del cls.order_status[target_order_id]
 
     @classmethod
     def get_latest_order_num(cls):
-        if len(cls.order_serial) > 0:
-            return sorted(list(cls.order_serial.keys()))[-1]
-        else:
-            return -1
+        with cls.lock_order_data:
+            if len(cls.order_serial) > 0:
+                return sorted(list(cls.order_serial.keys()))[-1]
+            else:
+                return -1
 
     @classmethod
     def __initialize_holding(cls):
@@ -101,22 +135,34 @@ class Account:
         cls.holding_size = 0
         cls.holding_dt = ''
 
+
     @classmethod
     def entry_order(cls, order_id, side, price, qty, type):
-        if side == 'Buy':
-            cls.num_buy += 1
-        elif side == 'Sell':
-            cls.num_sell += 1
-        else:
-            print('Account.entry_order: invalid order type!', type)
-        if order_id not in cls.order_id_list:
-            cls.order_id_list.append(order_id)
-            cls.order_side[order_id] = side
+        with cls.lock_order_data:
+            if side == 'Buy':
+                cls.num_buy += 1
+            elif side == 'Sell':
+                cls.num_sell += 1
+            else:
+                print('Account.entry_order: invalid order type!', type)
+            if order_id not in cls.order_id_list:
+                cls.order_id_list.append(order_id)
+                cls.order_side[order_id] = side
+                cls.order_price[order_id] = price
+                cls.order_leaves_qty[order_id] = qty
+                cls.order_dt[order_id] = datetime.datetime.now()
+                cls.order_type[order_id] = type  # Limit, Market
+                cls.order_status[order_id] = 'new entry'
+
+    @classmethod
+    def cancel_order(cls, order_id):
+        cls.__del_order(order_id)
+
+    @classmethod
+    def update_order_price(cls, order_id, price):
+        with cls.lock_order_data:
             cls.order_price[order_id] = price
-            cls.order_leaves_qty[order_id] = qty
-            cls.order_dt[order_id] = datetime.datetime.now()
-            cls.order_type[order_id] = type  # Limit, Market
-            cls.order_status[order_id] = 'new entry'
+
 
     @classmethod
     def exit_all(cls, i, dt):
@@ -140,7 +186,8 @@ class Account:
     def __process_execution(cls, order_id, leaves_qty, exec_qty, last_exec_price, order_type, status):
         if order_id in cls.order_id_list:
             if status == 'Cancelled':
-                cls.__del_order(order_id)
+                if order_id in cls.order_id_list:
+                    cls.__del_order(order_id)
             elif status == 'New':
                 if order_id in cls.order_id_list:
                     if exec_qty > 0:
@@ -160,11 +207,15 @@ class Account:
                     cls.__calc_executed_fee(last_exec_price, exec_qty, order_type)
                     cls.__calc_executed_pl(last_exec_price, exec_qty)
                     cls.__update_holding(cls.order_side[order_id], last_exec_price, exec_qty, datetime.datetime.now())
-                cls.order_status[order_id] = status
+                with cls.lock_order_data:
+                    cls.order_status[order_id] = status
                 if status == 'PartiallyFilled':
-                    cls.order_leaves_qty[order_id] = leaves_qty
+                    with cls.lock_order_data:
+                        print('Account: Order Partially Filled', cls.order_leaves_qty[order_id] - leaves_qty)
+                        cls.order_leaves_qty[order_id] = leaves_qty
                 elif status == 'Filled':
                     if cls.order_leaves_qty - exec_qty < 10:
+                        print('Account: Order Filled', cls.get_order_data())
                         cls.__del_order(order_id)
                     else:
                         print('Account.process_execution: order filled but leave qty and exec qty is not consistent', cls.order_leaves_qty, exec_qty)
