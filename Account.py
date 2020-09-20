@@ -64,6 +64,9 @@ class Account:
 
         th = threading.Thread(target=cls.__ohlc_thread)
         th.start()
+        th1 = threading.Thread(target=cls.__display_thread)
+        th1.start()
+
         print('Account thread started')
 
 
@@ -79,13 +82,22 @@ class Account:
             time.sleep(10)
 
     @classmethod
+    def __display_thread(cls):
+        while SystemFlg.get_system_flg():
+            print('pl=', cls.total_pl, 'num_trade=', cls.num_trade, 'win_rate=', cls.win_rate, 'pl_per_min=', cls.pl_per_min)
+            print(cls.get_order_data())
+            print('holding_side=', cls.holding_side, 'holding_price', cls.holding_price, 'holding_qty=', cls.holding_qty)
+            time.sleep(60)
+
+    @classmethod
     def __check_order_status_API(cls):
         if len(cls.order_id_list) > 0:
             orders = Trade.get_orders()#.reverse()
             for order in orders:
                 if order['info']['order_id'] in cls.order_id_list:
                     if order['info']['leaves_qty'] < cls.order_leaves_qty[order['info']['order_id']]:
-                        cls.__process_execution(order['info']['order_id'], order['info']['leaves_qty'], order['info']['exec_qty'], order['info']['last_exec_price'], order['info']['order_type'], order['info']['order_status'])
+                        exec_qty = order['info']['qty'] - order['info']['leaves_qty']
+                        cls.__process_execution(order['info']['order_id'], order['info']['leaves_qty'], exec_qty, order['info']['last_exec_price'], order['info']['order_type'], order['info']['order_status'])
 
 
     @classmethod
@@ -132,7 +144,7 @@ class Account:
     def __initialize_holding(cls):
         cls.holding_side = ''
         cls.holding_price = 0
-        cls.holding_size = 0
+        cls.holding_qty = 0
         cls.holding_dt = ''
 
 
@@ -167,19 +179,20 @@ class Account:
     @classmethod
     def exit_all(cls, i, dt):
         if cls.holding_side != '':
-            cls.entry_order('buy' if cls.holding_side == 'sell' else 'sell', 0, cls.holding_size, 'market', i, dt)
+            cls.entry_order('buy' if cls.holding_side == 'sell' else 'sell', 0, cls.holding_qty, 'market', i, dt)
 
     @classmethod
-    def __update_holding(cls, side, price, size, dt):
-        if cls.holding_side != side:
+    def __update_holding(cls, side, price, qty, dt):
+        if cls.holding_side != '' and cls.holding_side != side:
             cls.num_trade += 1
             cls.__calc_total_pl()
             if cls.total_pl > cls.pre_total_pl:
                 cls.num_win +=1
-            cls.win_rate = round(cls.num_win / cls.num_win, 4)
+            cls.pre_total_pl = cls.total_pl
+            cls.win_rate = round(cls.num_win / cls.num_trade, 4)
         cls.holding_side = side
         cls.holding_price = price
-        cls.holding_size = size
+        cls.holding_qty = qty
         cls.holding_dt = dt
 
     @classmethod
@@ -199,7 +212,7 @@ class Account:
                     cls.__calc_executed_fee(last_exec_price, exec_qty, order_type)
                     cls.__update_holding(cls.order_side[order_id], last_exec_price, exec_qty, datetime.datetime.now())
                 elif cls.holding_side == cls.order_side[order_id]: #additional entry
-                    ave_price = (cls.holding_size * cls.holding_price + exec_qty * last_exec_price) / (cls.holding_size + exec_qty)
+                    ave_price = (cls.holding_qty * cls.holding_price + exec_qty * last_exec_price) / (cls.holding_qty + exec_qty)
                     cls.__calc_executed_fee(last_exec_price, exec_qty, order_type)
                     cls.__calc_executed_pl(last_exec_price, exec_qty)
                     cls.__update_holding(cls.order_side[order_id], ave_price, exec_qty, datetime.datetime.now())
@@ -214,7 +227,7 @@ class Account:
                         print('Account: Order Partially Filled', cls.order_leaves_qty[order_id] - leaves_qty)
                         cls.order_leaves_qty[order_id] = leaves_qty
                 elif status == 'Filled':
-                    if cls.order_leaves_qty - exec_qty < 10:
+                    if cls.order_leaves_qty[order_id] - exec_qty < 10:
                         print('Account: Order Filled', cls.get_order_data())
                         cls.__del_order(order_id)
                     else:
@@ -234,12 +247,12 @@ class Account:
 
     @classmethod
     def __calc_executed_pl(cls, exec_price, exec_qty):
-        pl = (exec_price - cls.holding_price if cls.holding_side == 'buy' else cls.holding_price - exec_price) * exec_qty
+        pl = (exec_price - cls.holding_price if cls.holding_side == 'Buy' else cls.holding_price - exec_price) / cls.holding_price * exec_qty
         cls.realized_pl += round(pl, 8)
 
     @classmethod
     def __calc_executed_fee(cls,  exec_price, exec_qty, order_type):
-        fee = (cls.maker_fee if order_type == 'Limit' else cls.taker_fee * exec_qty) / exec_price
+        fee = cls.maker_fee if order_type == 'Limit' else cls.taker_fee * exec_qty
         cls.total_fee -= round(fee, 8)
 
     @classmethod
@@ -248,7 +261,7 @@ class Account:
             cls.current_pl = 0
         else:
             bid, ask = Trade.get_bid_ask()
-            cls.current_pl = (bid - cls.holding_price) * cls.holding_size if cls.holding_side == 'Buy' else (cls.holding_price - ask) * cls.holding_size
+            cls.current_pl = (bid - cls.holding_price) / cls.holding_price * cls.holding_qty if cls.holding_side == 'Buy' else (cls.holding_price - ask) / cls.holding_price * cls.holding_qty
         cls.total_pl = cls.realized_pl + cls.current_pl - cls.total_fee
 
 

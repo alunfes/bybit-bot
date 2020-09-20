@@ -1,5 +1,13 @@
 import threading
 import time
+from Account import Account
+from MarketData import MarketData, OneMinData
+from Strategy import Strategy
+from Trade import Trade
+from PrivateWS import PrivateWS
+from Account import Account
+from SystemFlg import SystemFlg
+from Bot import Bot
 
 class Test:
     def main_thread(self):
@@ -28,8 +36,27 @@ class ACTest:
             print('ACTest', time.time() -start)
 
 
+class Master:
+    def master_thread(self):
+        # initalize
+        print('Bot Started')
+        SystemFlg.initialize()
+        # pws = PrivateWS()
+        Trade.initialize()
+        MarketData.initialize_for_bot(5, 1, 1500, 10)
+        Account.initialize()
+        print('Bot: Waiting for initial prediction...')
+        bot = Bot()
+        bot.test_bot(10000)
+        while SystemFlg.get_system_flg():
+            time.sleep(10)
+
+
+
+
+
 if __name__ == '__main__':
-    test = Test()
-    test.main_thread()
+    master = Master()
+    master.master_thread()
     while True:
-        time.sleep(100)
+        time.sleep(1)
