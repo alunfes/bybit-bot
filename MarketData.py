@@ -63,7 +63,7 @@ class MarketData:
         cls.log_data = LogData()
         cls.df['opt_position'] = cls.calc_opt_position()
         cls.set_model_data(cls.generate_data_for_model(cls.df))
-        cls.model = keras.models.load_model('./Model/model.h5', compile=False, custom_objects={'KerasLayer':hub.KerasLayer})
+        cls.model = keras.models.load_model('./Model/model3.h5', compile=False, custom_objects={'KerasLayer':hub.KerasLayer})
         cls.model.summary()
         print('initialized MarketData')
         #print(cls.x_train[-1])

@@ -18,13 +18,13 @@ topic:orderを取得してprivate wsのtopic=orderで約定を確認
 
 class testA:
     @classmethod
-    def r(cls, data):
+    def __r(cls, data):
         print(data)
 
     @classmethod
     async def process_execution(cls, data):
         loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, partial(cls.r, data))
+        loop.run_in_executor(None, partial(cls.__r, data))
 
 class ws:
     def get_data(cls):
