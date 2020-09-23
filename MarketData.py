@@ -52,8 +52,6 @@ class MarketData:
         cls.model_data_lock = threading.Lock()
         cls.df_lock = threading.Lock()
         cls.pred_lock = threading.Lock()
-        cls.time_sleep_lock = threading.Lock() #adjust time sleep for Bot and Account to prioritize MarketData calc
-        cls.time_sleep = 1
         cls.prediction = ''
         cls.opt_window_size = opt_window_size
         cls.opt_kijun = opt_kijun
@@ -63,7 +61,7 @@ class MarketData:
         cls.log_data = LogData()
         cls.df['opt_position'] = cls.calc_opt_position()
         cls.set_model_data(cls.generate_data_for_model(cls.df))
-        cls.model = keras.models.load_model('./Model/model3.h5', compile=False, custom_objects={'KerasLayer':hub.KerasLayer})
+        cls.model = keras.models.load_model('./Model/model.h5', compile=False, custom_objects={'KerasLayer':hub.KerasLayer})
         cls.model.summary()
         print('initialized MarketData')
         #print(cls.x_train[-1])
@@ -101,15 +99,6 @@ class MarketData:
         with cls.model_data_lock:
             cls.x_train, cls.y_train, cls.abs_train = model_data[0], model_data[1], model_data[2].reshape(model_data[2].shape[0], model_data[2].shape[1], 1)
 
-    @classmethod
-    def __set_time_sleep(cls, t):
-        with cls.time_sleep_lock:
-            cls.time_sleep = t
-
-    @classmethod
-    def get_time_sleep(cls):
-        with cls.time_sleep_lock:
-            return cls.time_sleep
 
     @classmethod
     def get_df(cls):
@@ -197,7 +186,6 @@ class MarketData:
 
     @classmethod
     def generate_data_for_model(cls, df_master):
-        cls.__set_time_sleep(7)
         start = time.time()
         scaler = MinMaxScaler()
         df = df_master.copy()
@@ -219,7 +207,7 @@ class MarketData:
             ave_div.append(close[i + cls.time_steps - 1] / np.average(close[i:i + cls.time_steps]))
         df['cov'] = cov
         df['ave_div'] = ave_div
-        df['pre_opt'] = df['opt_position'].shift(6) - 1
+        df['pre_opt'] = df['opt_position'].shift(5) - 1
 
         con_df_train_x = []
         con_df_train_y = []
@@ -242,7 +230,6 @@ class MarketData:
         y_train = np.array(con_df_train_y)
         abs_train = np.array(abs_df_train_x)
         print('Generated model data, time:', time.time() - start)
-        cls.__set_time_sleep(1)
         return x_train, y_train, abs_train
 
 

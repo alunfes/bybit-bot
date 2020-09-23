@@ -2,9 +2,9 @@ from functools import partial
 import requests
 import asyncio
 import numpy as np
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import json
-import time
+import os
 
 
 class LineNotification:
@@ -18,24 +18,36 @@ class LineNotification:
 
     @classmethod
     def send_message(cls, message):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(cls.send_message(message))
-
-
-    @classmethod
-    async def __send_message__wrapper(cls, message):
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, partial(cls.__send_message, message))
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(cls.__send_message(message))
 
     @classmethod
-    def __send_message(cls, message):
-        payload = {"message": message}
+    async def __send_message(cls, message):
+        payload = {"message": str(message)}
         try:
             res = requests.post(cls.api_url, headers=cls.headers, data=payload, timeout=(6.0))
+        except Exception as e:
+            print('Line notify error!={}'.format(e))
+
+    @classmethod
+    def send_image(cls, image):
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(cls.__send_image(image))
+
+    @classmethod
+    async def __send_image(cls, image):
+        payload = {"imageFile": image}
+        try:
+            res = requests.post(cls.api_url, headers=cls.headers, params={"message" :  'PL Chart'}, files=payload, timeout=(6.0))
         except Exception as e:
             print('Line notify error!={}'.format(e))
 
 
 if __name__ == '__main__':
     LineNotification.initialize()
-    LineNotification.do_send_message('test')
+    li = [1,2,3,4,3,4,5,6,5,4,3,4,5,6,7]
+    plt.plot(li)
+    plt.savefig('./ignore/test.jpeg')
+    print('kita1')
+    LineNotification.send_image(open('./ignore/test.jpeg', 'rb'))
+    print('kita')

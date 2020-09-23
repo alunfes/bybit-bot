@@ -8,6 +8,9 @@ from PrivateWS import PrivateWS
 from Account import Account
 from SystemFlg import SystemFlg
 from Bot import Bot
+from LineNotification import LineNotification
+import matplotlib.pyplot as plt
+
 
 class Test:
     def main_thread(self):
@@ -36,27 +39,25 @@ class ACTest:
             print('ACTest', time.time() -start)
 
 
-class Master:
-    def master_thread(self):
-        # initalize
-        print('Bot Started')
-        SystemFlg.initialize()
-        # pws = PrivateWS()
-        Trade.initialize()
-        MarketData.initialize_for_bot(5, 1, 1500, 10)
-        Account.initialize()
-        print('Bot: Waiting for initial prediction...')
-        bot = Bot()
-        bot.test_bot(10000)
-        while SystemFlg.get_system_flg():
-            time.sleep(10)
+class Image:
+    def display(self):
+        LineNotification.initialize()
+        l = [1, 2, 3, 4, 5, 4,6,7,8,9,3,4,5,6,3,4]
+        plt.plot(l)
+        plt.savefig('./ignore/figure.jpeg')
+        LineNotification.send_image(open('./ignore/figure.jpeg','rb'))
+
+
+
 
 
 
 
 
 if __name__ == '__main__':
-    master = Master()
-    master.master_thread()
-    while True:
+
+    img = Image()
+    img.display()
+    for i in range(10):
         time.sleep(1)
+
